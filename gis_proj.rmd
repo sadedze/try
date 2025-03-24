@@ -1,0 +1,215 @@
+---
+title: "Sync Data"
+author: "Senam Adedze"
+date: "2025-03-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#load libraries
+library(tidycensus)
+library(tmap)
+library(tidyverse)
+library(sf)
+library(magrittr)
+library(geojsonsf)
+library(googlesheets4)
+library(cols4all)
+```
+
+
+```{r load data, include=FALSE}
+#load sync data
+
+sync_data <- read_csv("last_sync_dates_lwala.csv")
+
+sync_data1 <- read_csv("sync data migori jan 28.csv")
+
+ken_shp <- read_sf("C:/Users/Senam Adedze/Downloads/ke_subcounty")
+
+```
+
+
+```{r cleaning, include=FALSE}
+
+# Check geometries
+ggplot(data = ken_shp) +
+  geom_sf(fill = "lightblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Kenya Sub-Counties",
+       caption = "Source: ke_subcounty shapefile")
+
+# filter for 3 subcounties
+filtered_shp <- ken_shp %>%
+  filter(county %in% c("Baringo", "Homa Bay", "Migori"))
+
+migori_shp <- filtered_shp %>% 
+  filter(county == "Migori")
+
+migori_sync <- sync_data %>% 
+  filter(county_name == "Migori")
+
+
+# summarize by subcounty
+migori_sync_aggregated <- migori_sync %>%
+  select(-chu_name, -user_name, -last_replication_date) %>%  # remove chu, username, date
+  group_by(county_name, sub_county_name) %>%
+  summarize(
+    avg_days_since_last_sync = mean(days_since_last_sync,na.rm = TRUE),
+    num_chps = sum(days_since_last_sync > 43, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+jan_migori_sync_agg <- sync_data1 %>% 
+  select(-chu_name, -user_name, -last_replication_date) %>%  # remove chu, username, date
+  group_by(county_name, sub_county_name) %>%
+  summarize(
+    avg_days_since_last_sync = mean(days_since_last_sync, na.rm = TRUE),
+    num_chps = sum(days_since_last_sync > 43, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# check columns for matching issues
+colnames(ken_shp)
+colnames(sync_data)
+
+
+# Remove " Sub County" from the subcounty column
+filtered_shp <- filtered_shp %>%
+  mutate(subcounty = gsub(" Sub County", "", subcounty))
+
+migori_shp <- migori_shp %>% 
+  mutate(subcounty = gsub(" Sub County", "", subcounty))
+
+```
+
+## Static Map 
+
+```{r static, echo=FALSE}
+# Join data
+
+joined_data <- migori_shp %>%
+  left_join(migori_sync_aggregated, by = c("subcounty" = "sub_county_name")) %>% 
+  left_join(jan_migori_sync_agg, by = c("subcounty" = "sub_county_name"))
+
+
+# map 2
+tm_shape(joined_data) +
+  tm_polygons(
+    fill = "avg_days_since_last_sync.y",
+    fill.legend = tm_legend(title = "Average Days Since Last Sync"), 
+    fill.scale = tm_scale_intervals(
+      values = "brewer.blues",
+      style = "pretty"           
+    ),
+    fill_alpha = 0.9,                         # Transparency for the polygon fills
+    col_alpha = 0.3,                          # Transparency for the polygon borders
+    col = "black"                      # Color for polygon borders
+  ) +
+  tm_scalebar(position=c("left", "bottom")) +     # Adds a scale bar
+  tm_title("Migori County Sync Data, Feb 12") +                 # Adds a title
+  tm_layout(legend.outside = TRUE,            # Legend location
+            legend.frame = FALSE,
+            frame = FALSE,
+            inner.margins = c(0.10, 0.05, 0.10, 0.05))
+
+```
+
+## Side by Side Comparison
+
+```{r side, echo=FALSE}
+
+
+feb <- tm_shape(joined_data) +
+  tm_polygons(
+    fill = "num_chps.x",
+    fill.legend = tm_legend(title = "Number of CHPs With Delayed Syncing"), 
+    fill.scale = tm_scale_intervals(
+      values = "brewer.blues",
+      style = "pretty"           
+    ),
+    fill_alpha = 0.9,                         # Transparency for the polygon fills
+    col_alpha = 0.3,                          # Transparency for the polygon borders
+    col = "black"                      # Color for polygon borders
+  ) +
+  tm_scalebar(position=c("left", "bottom")) +     # Adds a scale bar
+  tm_title("Migori County Sync Data, Jan 28") +                 # Adds a title
+  tm_layout(legend.outside = TRUE,            # Legend location
+            legend.frame = FALSE,
+            legend.text.size = 0.5,
+            legend.title.size = 0.7,
+            frame = FALSE,
+            inner.margins = c(0.10, 0.05, 0.10, 0.05))
+
+jan <- tm_shape(joined_data) +
+  tm_polygons(
+    fill = "num_chps.y",
+    fill.legend = tm_legend(title = "Number of CHPs With Delayed Syncing"), 
+    fill.scale = tm_scale_intervals(
+      values = "brewer.blues",
+      style = "pretty"           
+    ),
+    fill_alpha = 0.9,                         # Transparency for the polygon fills
+    col_alpha = 0.3,                          # Transparency for the polygon borders
+    col = "black"                      # Color for polygon borders
+  ) +
+  tm_scalebar(position=c("left", "bottom")) +     # Adds a scale bar
+  tm_title("Migori County Sync Data, Feb 12") +                 # Adds a title
+  tm_layout(legend.outside = TRUE,            # Legend location
+            legend.frame = FALSE,
+            legend.text.size = 0.5,
+            legend.title.size = 0.7,
+            frame = FALSE,
+            inner.margins = c(0.10, 0.05, 0.10, 0.05))
+
+
+janfeb <- tmap_arrange(jan, feb, nrow = 1)
+
+janfeb
+
+
+```
+
+
+
+
+## Interactive Map 
+
+```{r interactive, echo=FALSE}
+tmap_mode("view")
+intmap <- tm_shape(joined_data) +
+  tm_polygons(
+    fill = "avg_days_since_last_sync.x",
+    fill.legend = tm_legend(title = "Average Days Since Last Sync"), 
+    fill.scale = tm_scale_intervals(
+      values = "brewer.blues",
+      style = "pretty"           
+    ),
+    fill_alpha = 0.9,                         # Transparency for the polygon fills
+    col_alpha = 0.3,                          # Transparency for the polygon borders
+    col = "black",                      # Color for polygon borders
+    popup.vars = c("Subcounty" = "subcounty", "Avg. Days Since Last Sync" = "avg_days_since_last_sync.x")
+  ) +
+  tm_scalebar(position=c("left", "bottom")) +     # Adds a scale bar
+  tm_title("Migori County Sync Data, Feb 12") +                 # Adds a title
+  tm_layout(legend.outside = TRUE,            # Legend location
+            legend.frame = FALSE,
+            legend.text.size = 0.5,
+            legend.title.size = 0.7,
+            frame = FALSE,
+            inner.margins = c(0.10, 0.05, 0.10, 0.05))
+
+intmap + tm_view(legend.position = c("left", "bottom"))
+
+```
+
+### [Time Series Map](https://sadedze.github.io/geog456repo/finalproj/closures.html) 
+
+
+
+
+
+
+
